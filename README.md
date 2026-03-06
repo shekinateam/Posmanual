@@ -86,7 +86,10 @@
       box-shadow:0 12px 40px rgba(0,0,0,.35);
       padding:16px;
     }
-    .headrow{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px;}
+    .headrow{
+      display:flex; align-items:flex-start; justify-content:space-between;
+      gap:12px; margin-bottom:10px;
+    }
     .mini{
       display:inline-flex; align-items:center; justify-content:center;
       padding:10px 12px;
@@ -243,6 +246,49 @@
       white-space:nowrap;
     }
     .copybtn:hover{filter:brightness(1.08);}
+    .downloadbtn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+      padding:9px 12px;
+      border-radius:12px;
+      border:1px solid rgba(255,210,122,.28);
+      background:rgba(255,210,122,.10);
+      color:#fff2cf;
+      font-size:13px;
+      cursor:pointer;
+      user-select:none;
+      white-space:nowrap;
+    }
+    .downloadbtn:hover{filter:brightness(1.08);}
+    .downloadbtn.disabled{
+      opacity:.45;
+      border-color:rgba(255,255,255,.18);
+      background:rgba(255,255,255,.06);
+      color:#aab2d5;
+      cursor:default;
+      pointer-events:none;
+    }
+
+    .filecard{
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:14px;
+      padding:14px;
+      background:rgba(0,0,0,.14);
+    }
+    .filetitle{
+      display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+      font-size:15px; font-weight:900;
+    }
+    .filedesc{
+      margin-top:8px;
+      color:#d9def6;
+      font-size:13px;
+      line-height:1.6;
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
 
     @media (max-width: 900px){
       .app{grid-template-columns:1fr;}
@@ -268,19 +314,20 @@
       <div class="logo">POS</div>
       <div>
         <h1>포스설치 메뉴얼</h1>
-        <p>설치 설정 순서</p>
+        <p>설치 설정 순서 / 자료실</p>
       </div>
     </div>
 
     <nav class="nav">
       <a href="#steps" data-tab="steps" class="active">🧩 설치순서 <span class="chip">Guide</span></a>
+      <a href="#files" data-tab="files">📁 자료실 <span class="chip">Drive</span></a>
     </nav>
   </aside>
 
   <main class="main">
     <div class="topbar">
       <div class="search">
-        🔎 <input id="q" placeholder="검색 (단계/구분/제목/내용/태그)" />
+        🔎 <input id="q" placeholder="검색 (구분/제목/내용/파일명/설명/태그)" />
       </div>
       <button class="mini" id="btnReload">새로고침</button>
     </div>
@@ -289,36 +336,47 @@
       <div class="headrow">
         <div style="display:flex; flex-direction:column; gap:10px; min-width:0;">
           <h2 style="margin:0">설치 설정 순서</h2>
-          <div class="filters" id="catFilters"></div>
+          <div class="filters" id="catFiltersSteps"></div>
         </div>
-        <div class="meta" id="stat"></div>
+        <div class="meta" id="statSteps"></div>
       </div>
       <div class="list" id="stepsList"></div>
+    </section>
+
+    <section class="card" id="tab-files" style="display:none;">
+      <div class="headrow">
+        <div style="display:flex; flex-direction:column; gap:10px; min-width:0;">
+          <h2 style="margin:0">자료실</h2>
+          <div class="filters" id="catFiltersFiles"></div>
+        </div>
+        <div class="meta" id="statFiles"></div>
+      </div>
+      <div class="list" id="filesList"></div>
     </section>
   </main>
 </div>
 
 <script>
-/** ✅ 시트 정보 */
 const SHEET_ID = "1p9DzZ7_GR9m5wwQCIRdQIHitPhUCfh3iVLjFF-RfrWE";
-const GID = "1399061484";
+const GID_STEPS = "1399061484";
+const GID_FILES = "1068626642";
 
-/** helpers */
 const $  = (q)=>document.querySelector(q);
 const $$ = (q)=>Array.from(document.querySelectorAll(q));
 
-let itemsCached = [];
-let catFilter = "all";
+let stepsCached = [];
+let filesCached = [];
 
-/** 숨김 디버그 상태(화면에 표시 안 함) */
+let filtersState = {
+  steps: "all",
+  files: "all"
+};
+
+let activeTab = "steps";
+
 let __debug = {
-  tried: [],
-  ok: false,
-  error: "",
-  gvizUrl: "",
-  csvUrl: "",
-  rows: 0,
-  updatedAt: ""
+  steps: { tried: [], ok: false, error: "", rows: 0, updatedAt: "" },
+  files: { tried: [], ok: false, error: "", rows: 0, updatedAt: "" }
 };
 
 function escapeHtml(str){
@@ -349,21 +407,57 @@ function normalizeHeader(s){
   return String(s||"").trim().toLowerCase().replace(/\s+/g,"");
 }
 
-/** route (단일 탭) */
-function setTabUI(){
-  $$(".nav a").forEach(a=>a.classList.toggle("active", true));
-  $("#tab-steps").style.display  = "block";
-}
-window.addEventListener("hashchange", ()=> setTabUI());
+function extractGoogleDriveFileId(url){
+  const t = String(url||"").trim();
+  if(!t) return "";
 
-/** 1) gviz(JSONP) */
-function loadByGviz(tq){
+  const patterns = [
+    /\/file\/d\/([a-zA-Z0-9_-]+)/,
+    /[?&]id=([a-zA-Z0-9_-]+)/,
+    /\/d\/([a-zA-Z0-9_-]+)/,
+    /\/folders\/([a-zA-Z0-9_-]+)/
+  ];
+
+  for(const p of patterns){
+    const m = t.match(p);
+    if(m && m[1]) return m[1];
+  }
+  return "";
+}
+function getDriveViewUrl(url){
+  const raw = normUrl(url);
+  const fileId = extractGoogleDriveFileId(raw);
+  if(fileId && raw.includes("/file/")) return `https://drive.google.com/file/d/${fileId}/view`;
+  return raw;
+}
+function getDriveDownloadUrl(url){
+  const raw = normUrl(url);
+  const fileId = extractGoogleDriveFileId(raw);
+  if(fileId && raw.includes("/file/")) return `https://drive.google.com/uc?export=download&id=${fileId}`;
+  return raw;
+}
+
+function setTabUI(){
+  const hash = (location.hash || "#steps").replace("#", "");
+  activeTab = (hash === "files") ? "files" : "steps";
+
+  $$(".nav a").forEach(a=>{
+    a.classList.toggle("active", a.dataset.tab === activeTab);
+  });
+
+  $("#tab-steps").style.display = activeTab === "steps" ? "block" : "none";
+  $("#tab-files").style.display = activeTab === "files" ? "block" : "none";
+
+  renderActive();
+}
+window.addEventListener("hashchange", setTabUI);
+
+function loadByGviz(gid, tq){
   return new Promise((resolve, reject) => {
     const cbName = "__gviz_cb_" + Math.random().toString(36).slice(2) + Date.now();
     const query = encodeURIComponent(tq || "select A,B,C,D,E,F limit 3000");
     const tqx = encodeURIComponent(`out:json;responseHandler:${cbName}`);
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${encodeURIComponent(GID)}&tq=${query}&tqx=${tqx}&_=${Date.now()}`;
-    __debug.gvizUrl = url;
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=${encodeURIComponent(gid)}&tq=${query}&tqx=${tqx}&_=${Date.now()}`;
 
     const script = document.createElement("script");
     const timer = setTimeout(() => { cleanup(); reject(new Error("GVIZ timeout")); }, 12000);
@@ -397,9 +491,8 @@ function loadByGviz(tq){
   });
 }
 
-/** 2) Publish CSV fallback */
-function buildCsvUrl(){
-  return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(SHEET_ID)}/pub?gid=${encodeURIComponent(GID)}&single=true&output=csv`;
+function buildCsvUrl(gid){
+  return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(SHEET_ID)}/pub?gid=${encodeURIComponent(gid)}&single=true&output=csv`;
 }
 function parseCSV(text){
   const rows = [];
@@ -430,9 +523,8 @@ function parseCSV(text){
   rows.push(row.map(x=>String(x).replace(/\r/g,"")));
   return rows.filter(r => r.some(c => String(c).trim()!==""));
 }
-async function loadByCsv(){
-  const url = buildCsvUrl();
-  __debug.csvUrl = url;
+async function loadByCsv(gid){
+  const url = buildCsvUrl(gid);
   const res = await fetch(url, { cache: "no-store" });
   const text = await res.text();
 
@@ -443,7 +535,14 @@ async function loadByCsv(){
   return parseCSV(text);
 }
 
-/** rows -> items (A~F, 헤더 자동 인식) */
+async function loadSheetRows(gid, selectQuery="select A,B,C,D,E,F limit 3000"){
+  try{
+    return await loadByGviz(gid, selectQuery);
+  }catch(e1){
+    return await loadByCsv(gid);
+  }
+}
+
 function buildColMap(headerRow){
   const cols = (headerRow||[]).map(normalizeHeader);
   const pick = (...keys)=>{
@@ -454,23 +553,29 @@ function buildColMap(headerRow){
     return -1;
   };
   return {
-    stepIdx:  pick("단계","step","순서","no","번호"),
-    catIdx:   pick("구분","분류","카테고리","category","type"),
-    titleIdx: pick("제목","title","항목","작업"),
-    bodyIdx:  pick("내용","설명","detail","desc","방법"),
-    linkIdx:  pick("링크","url","자료","첨부","참고"),
-    tagIdx:   pick("태그","tags","키워드")
+    stepIdx:       pick("단계","step","순서","no","번호"),
+    catIdx:        pick("구분","분류","카테고리","category","type"),
+    titleIdx:      pick("제목","title","항목","작업"),
+    bodyIdx:       pick("내용","설명","detail","desc","방법"),
+    linkIdx:       pick("링크","url","자료","첨부","참고"),
+    tagIdx:        pick("태그","tags","키워드"),
+
+    fileNameIdx:   pick("파일명","파일이름","name","filename","문서명"),
+    fileDescIdx:   pick("설명","내용","desc","detail","비고"),
+    fileLinkIdx:   pick("파일링크","링크","url","다운로드링크","자료링크"),
+    fileTagIdx:    pick("태그","tags","키워드")
   };
 }
-function rowsToItems(rows){
+
+function rowsToStepItems(rows){
   const clean = (rows||[]).filter(r => (r||[]).some(x => String(x).trim() !== ""));
   if(!clean.length) return [];
 
   const first = clean[0].map(String);
   const firstNorm = first.map(normalizeHeader).join("|");
   const looksHeader =
-    firstNorm.includes("단계") || firstNorm.includes("제목") || firstNorm.includes("내용") || firstNorm.includes("링크") ||
-    firstNorm.includes("분류") || firstNorm.includes("구분");
+    firstNorm.includes("단계") || firstNorm.includes("제목") || firstNorm.includes("내용") ||
+    firstNorm.includes("링크") || firstNorm.includes("분류") || firstNorm.includes("구분");
 
   let dataRows = clean;
   let map = null;
@@ -513,7 +618,44 @@ function rowsToItems(rows){
   return items;
 }
 
-/** render */
+function rowsToFileItems(rows){
+  const clean = (rows||[]).filter(r => (r||[]).some(x => String(x).trim() !== ""));
+  if(!clean.length) return [];
+
+  const first = clean[0].map(String);
+  const firstNorm = first.map(normalizeHeader).join("|");
+  const looksHeader =
+    firstNorm.includes("파일명") || firstNorm.includes("파일링크") ||
+    firstNorm.includes("구분") || firstNorm.includes("설명") || firstNorm.includes("태그");
+
+  let dataRows = clean;
+  let map = null;
+
+  if(looksHeader){
+    map = buildColMap(clean[0]);
+    dataRows = clean.slice(1);
+  }
+
+  const idxOr = (idx, fb)=> (idx!=null && idx>=0 ? idx : fb);
+
+  const catI      = idxOr(map?.catIdx,      0);
+  const fileNameI = idxOr(map?.fileNameIdx, 1);
+  const fileDescI = idxOr(map?.fileDescIdx, 2);
+  const fileLinkI = idxOr(map?.fileLinkIdx, 3);
+  const fileTagI  = idxOr(map?.fileTagIdx,  4);
+
+  const items = dataRows.map((r, i)=>({
+    rowNo: i+2,
+    cat: String(r[catI]||"").trim(),
+    name: String(r[fileNameI]||"").trim(),
+    desc: String(r[fileDescI]||"").trim(),
+    link: String(r[fileLinkI]||"").trim(),
+    tags: String(r[fileTagI]||"").trim(),
+  })).filter(x => x.cat || x.name || x.desc || x.link || x.tags);
+
+  return items;
+}
+
 function uniqCats(items){
   const set = new Set();
   items.forEach(x=>{
@@ -522,42 +664,45 @@ function uniqCats(items){
   });
   return Array.from(set);
 }
-function renderFilters(items){
-  const wrap = $("#catFilters");
+function renderFilters(items, wrapId, mode){
+  const wrap = document.getElementById(wrapId);
   const cats = uniqCats(items);
 
   wrap.innerHTML = "";
   const all = document.createElement("div");
-  all.className = "fchip" + (catFilter==="all" ? " active" : "");
+  all.className = "fchip" + (filtersState[mode]==="all" ? " active" : "");
   all.dataset.f = "all";
+  all.dataset.mode = mode;
   all.textContent = "전체";
   wrap.appendChild(all);
 
   cats.forEach(c=>{
     const el = document.createElement("div");
-    el.className = "fchip" + (catFilter===c ? " active" : "");
+    el.className = "fchip" + (filtersState[mode]===c ? " active" : "");
     el.dataset.f = c;
+    el.dataset.mode = mode;
     el.textContent = c;
     wrap.appendChild(el);
   });
 }
-function matchesQuery(x, q){
+function matchesQuery(blob, q){
   if(!q) return true;
-  const blob = `${x.step} ${x.cat} ${x.title} ${x.body} ${x.tags} ${x.link}`.toLowerCase();
-  return blob.includes(q);
+  return blob.toLowerCase().includes(q);
 }
+
 function renderSteps(items){
   const list = $("#stepsList");
   const q = ($("#q").value||"").trim().toLowerCase();
 
   const filtered = items.filter(x=>{
-    if(catFilter!=="all" && String(x.cat||"").trim() !== catFilter) return false;
-    return matchesQuery(x, q);
+    if(filtersState.steps!=="all" && String(x.cat||"").trim() !== filtersState.steps) return false;
+    const blob = `${x.step} ${x.cat} ${x.title} ${x.body} ${x.tags} ${x.link}`;
+    return matchesQuery(blob, q);
   });
 
-  $("#stat").textContent = `표시: ${filtered.length} / 전체: ${items.length}`;
-
+  $("#statSteps").textContent = `표시: ${filtered.length} / 전체: ${items.length}`;
   list.innerHTML = "";
+
   if(!filtered.length){
     list.innerHTML = `<div class="empty">표시할 항목이 없습니다.</div>`;
     return;
@@ -598,67 +743,153 @@ function renderSteps(items){
         <button class="copybtn" data-copy="${escapeHtml([`[${x.step}] ${x.cat} - ${title}`, x.body, url].filter(Boolean).join("\n"))}">
           📋 내용 복사
         </button>
-
-        ${hasLink ? `<span class="meta" style="margin:0;">${escapeHtml(url)}</span>` : ``}
       </div>
     `;
-
     list.appendChild(d);
   });
 }
 
-/** load (GVIZ → CSV fallback) */
-async function reload(){
-  __debug = { tried: [], ok:false, error:"", gvizUrl:"", csvUrl:"", rows:0, updatedAt:"" };
+function renderFiles(items){
+  const list = $("#filesList");
+  const q = ($("#q").value||"").trim().toLowerCase();
 
-  $("#stat").textContent = "불러오는 중…";
-  $("#stepsList").innerHTML = `<div class="empty">불러오는 중…</div>`;
+  const filtered = items.filter(x=>{
+    if(filtersState.files!=="all" && String(x.cat||"").trim() !== filtersState.files) return false;
+    const blob = `${x.cat} ${x.name} ${x.desc} ${x.tags} ${x.link}`;
+    return matchesQuery(blob, q);
+  });
 
-  try{
-    __debug.tried.push("GVIZ");
-    const rows = await loadByGviz("select A,B,C,D,E,F limit 3000");
-    itemsCached = rowsToItems(rows);
-    __debug.ok = true;
-  }catch(e1){
-    __debug.error = e1?.message ? String(e1.message) : String(e1);
-    try{
-      __debug.tried.push("CSV");
-      const csvRows = await loadByCsv();
-      itemsCached = rowsToItems(csvRows);
-      __debug.ok = true;
-      __debug.error = "";
-    }catch(e2){
-      __debug.ok = false;
-      __debug.error = (e2?.message ? String(e2.message) : String(e2));
-      itemsCached = [];
-    }
+  $("#statFiles").textContent = `표시: ${filtered.length} / 전체: ${items.length}`;
+  list.innerHTML = "";
+
+  if(!filtered.length){
+    list.innerHTML = `<div class="empty">표시할 자료가 없습니다.</div>`;
+    return;
   }
 
-  __debug.rows = itemsCached.length;
-  __debug.updatedAt = new Date().toLocaleString();
+  filtered.forEach((x, idx)=>{
+    const item = document.createElement("div");
+    item.className = "filecard";
 
-  renderFilters(itemsCached);
-  renderSteps(itemsCached);
+    const tagArr = (x.tags||"").split(",").map(t=>t.trim()).filter(Boolean);
+    const tagsHtml = tagArr.length
+      ? `<div class="pillchip">${tagArr.map(t=>`<span>#${escapeHtml(t)}</span>`).join("")}</div>`
+      : "";
+
+    const hasLink = isLikelyUrl(x.link);
+    const viewUrl = hasLink ? getDriveViewUrl(x.link) : "";
+    const downloadUrl = hasLink ? getDriveDownloadUrl(x.link) : "";
+
+    item.innerHTML = `
+      <div class="filetitle">
+        <span class="step">${String(idx+1).padStart(2,"0")}</span>
+        ${x.cat ? `<span class="cat">${escapeHtml(x.cat)}</span>` : ``}
+        <span>${escapeHtml(x.name || "제목 없음")}</span>
+      </div>
+
+      ${x.desc ? `<div class="filedesc">${escapeHtml(x.desc)}</div>` : ``}
+      ${tagsHtml}
+
+      <div class="btnline">
+        <a class="linkbtn ${hasLink ? "" : "disabled"}" href="${hasLink ? escapeHtml(viewUrl) : "#"}" target="_blank" rel="noopener">
+          📂 열기
+        </a>
+
+        <a class="downloadbtn ${hasLink ? "" : "disabled"}" href="${hasLink ? escapeHtml(downloadUrl) : "#"}" target="_blank" rel="noopener">
+          ⬇ 다운로드
+        </a>
+
+        <button class="copybtn" data-copy="${escapeHtml(hasLink ? viewUrl : "")}">
+          🔗 링크 복사
+        </button>
+      </div>
+    `;
+    list.appendChild(item);
+  });
 }
 
-/** events */
+function renderActive(){
+  if(activeTab === "steps"){
+    renderFilters(stepsCached, "catFiltersSteps", "steps");
+    renderSteps(stepsCached);
+  }else{
+    renderFilters(filesCached, "catFiltersFiles", "files");
+    renderFiles(filesCached);
+  }
+}
+
+async function reload(){
+  $("#statSteps").textContent = "불러오는 중…";
+  $("#stepsList").innerHTML = `<div class="empty">불러오는 중…</div>`;
+  $("#statFiles").textContent = "불러오는 중…";
+  $("#filesList").innerHTML = `<div class="empty">불러오는 중…</div>`;
+
+  try{
+    __debug.steps = { tried:["GVIZ/CSV"], ok:false, error:"", rows:0, updatedAt:"" };
+    const stepRows = await loadSheetRows(GID_STEPS, "select A,B,C,D,E,F limit 3000");
+    stepsCached = rowsToStepItems(stepRows);
+    __debug.steps.ok = true;
+    __debug.steps.rows = stepsCached.length;
+    __debug.steps.updatedAt = new Date().toLocaleString();
+  }catch(e){
+    stepsCached = [];
+    __debug.steps.ok = false;
+    __debug.steps.error = e?.message ? String(e.message) : String(e);
+    __debug.steps.updatedAt = new Date().toLocaleString();
+  }
+
+  try{
+    __debug.files = { tried:["GVIZ/CSV"], ok:false, error:"", rows:0, updatedAt:"" };
+    if(String(GID_FILES).includes("여기에_자료실_gid_입력")){
+      throw new Error("자료실 gid를 입력해주세요.");
+    }
+    const fileRows = await loadSheetRows(GID_FILES, "select A,B,C,D,E limit 3000");
+    filesCached = rowsToFileItems(fileRows);
+    __debug.files.ok = true;
+    __debug.files.rows = filesCached.length;
+    __debug.files.updatedAt = new Date().toLocaleString();
+  }catch(e){
+    filesCached = [];
+    __debug.files.ok = false;
+    __debug.files.error = e?.message ? String(e.message) : String(e);
+    __debug.files.updatedAt = new Date().toLocaleString();
+  }
+
+  renderActive();
+}
+
 $("#btnReload").addEventListener("click", reload);
-$("#q").addEventListener("input", ()=> renderSteps(itemsCached));
-$("#catFilters").addEventListener("click", (ev)=>{
-  const btn = ev.target.closest(".fchip");
-  if(!btn) return;
-  catFilter = btn.dataset.f || "all";
-  $$("#catFilters .fchip").forEach(x=>x.classList.toggle("active", x.dataset.f === catFilter));
-  renderSteps(itemsCached);
+$("#q").addEventListener("input", renderActive);
+
+document.addEventListener("click", (ev)=>{
+  const navLink = ev.target.closest(".nav a");
+  if(navLink){
+    $$(".nav a").forEach(a=>a.classList.remove("active"));
+    navLink.classList.add("active");
+  }
+
+  const filterBtn = ev.target.closest(".fchip");
+  if(filterBtn){
+    const mode = filterBtn.dataset.mode;
+    const value = filterBtn.dataset.f || "all";
+    filtersState[mode] = value;
+    renderActive();
+    return;
+  }
+
+  const copyBtn = ev.target.closest(".copybtn");
+  if(copyBtn){
+    const text = copyBtn.dataset.copy || "";
+    copyText(text, copyBtn);
+  }
 });
-document.addEventListener("click", async (ev)=>{
-  const btn = ev.target.closest(".copybtn");
-  if(!btn) return;
-  const text = btn.dataset.copy || "";
+
+async function copyText(text, btn){
   try{
     await navigator.clipboard.writeText(text);
+    const old = btn.textContent;
     btn.textContent = "✅ 복사됨";
-    setTimeout(()=> btn.textContent = "📋 내용 복사", 900);
+    setTimeout(()=> btn.textContent = old, 900);
   }catch(e){
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -666,12 +897,12 @@ document.addEventListener("click", async (ev)=>{
     ta.select();
     try{ document.execCommand("copy"); }catch(_){}
     document.body.removeChild(ta);
+    const old = btn.textContent;
     btn.textContent = "✅ 복사됨";
-    setTimeout(()=> btn.textContent = "📋 내용 복사", 900);
+    setTimeout(()=> btn.textContent = old, 900);
   }
-});
+}
 
-/** 숨김 디버그: Ctrl + Shift + D */
 document.addEventListener("keydown", (e)=>{
   if(e.ctrlKey && e.shiftKey && (e.key==="D" || e.key==="d")){
     console.log("[POS MANUAL DEBUG]", __debug);
@@ -679,7 +910,6 @@ document.addEventListener("keydown", (e)=>{
   }
 });
 
-/** init */
 setTabUI();
 reload();
 </script>
