@@ -1,4 +1,3 @@
-<html lang="ko">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
@@ -276,7 +275,7 @@
         backdrop-filter:blur(10px);
         background:rgba(11,16,32,.92);
       }
-      .nav{flex-direction:row; gap:8px; margin-top:10px;}
+      .nav{flex-direction:row; gap:8px; margin-top:10px; flex-wrap:wrap;}
       .nav a{flex:1; justify-content:center; padding:10px 10px;}
       .chip{display:none;}
       .main{padding:14px;}
@@ -290,13 +289,14 @@
       <div class="logo">POS</div>
       <div>
         <h1>포스설치 메뉴얼</h1>
-        <p>설치 설정 순서 / 자료실</p>
+        <p>설치 설정 순서 / 자료실 / IOT 메뉴얼</p>
       </div>
     </div>
 
     <nav class="nav">
       <a href="#steps" data-tab="steps" class="active">🧩 설치순서 <span class="chip">Guide</span></a>
       <a href="#files" data-tab="files">📁 자료실 <span class="chip">Drive</span></a>
+      <a href="#iot" data-tab="iot">📡 IOT 설치 메뉴얼 <span class="chip">IOT</span></a>
     </nav>
   </aside>
 
@@ -329,6 +329,17 @@
       </div>
       <div class="list" id="filesList"></div>
     </section>
+
+    <section class="card" id="tab-iot" style="display:none;">
+      <div class="headrow">
+        <div style="display:flex; flex-direction:column; gap:10px; min-width:0;">
+          <h2 style="margin:0">IOT 설치 메뉴얼</h2>
+          <div class="filters" id="catFiltersIot"></div>
+        </div>
+        <div class="meta" id="statIot"></div>
+      </div>
+      <div class="list" id="iotList"></div>
+    </section>
   </main>
 </div>
 
@@ -336,23 +347,27 @@
 const SHEET_ID = "1p9DzZ7_GR9m5wwQCIRdQIHitPhUCfh3iVLjFF-RfrWE";
 const GID_STEPS = "1399061484";
 const GID_FILES = "1068626642";
+const GID_IOT   = "643804052";
 
 const $  = (q)=>document.querySelector(q);
 const $$ = (q)=>Array.from(document.querySelectorAll(q));
 
 let stepsCached = [];
 let filesCached = [];
+let iotCached   = [];
 
 let filtersState = {
   steps: "all",
-  files: "all"
+  files: "all",
+  iot: "all"
 };
 
 let activeTab = "steps";
 
 let __debug = {
   steps: { tried: [], ok: false, error: "", rows: 0, updatedAt: "" },
-  files: { tried: [], ok: false, error: "", rows: 0, updatedAt: "" }
+  files: { tried: [], ok: false, error: "", rows: 0, updatedAt: "" },
+  iot:   { tried: [], ok: false, error: "", rows: 0, updatedAt: "" }
 };
 
 function escapeHtml(str){
@@ -417,7 +432,7 @@ function getDriveViewUrl(url){
 
 function setTabUI(){
   const hash = (location.hash || "#steps").replace("#", "");
-  activeTab = (hash === "files") ? "files" : "steps";
+  activeTab = (hash === "files") ? "files" : (hash === "iot" ? "iot" : "steps");
 
   $$(".nav a").forEach(a=>{
     a.classList.toggle("active", a.dataset.tab === activeTab);
@@ -425,6 +440,7 @@ function setTabUI(){
 
   $("#tab-steps").style.display = activeTab === "steps" ? "block" : "none";
   $("#tab-files").style.display = activeTab === "files" ? "block" : "none";
+  $("#tab-iot").style.display   = activeTab === "iot" ? "block" : "none";
 
   renderActive();
 }
@@ -676,17 +692,17 @@ function matchesQuery(blob, q){
   return blob.toLowerCase().includes(q);
 }
 
-function renderSteps(items){
-  const list = $("#stepsList");
+function renderGuideList(items, listId, statId, mode){
+  const list = document.getElementById(listId);
   const q = ($("#q").value||"").trim().toLowerCase();
 
   const filtered = items.filter(x=>{
-    if(filtersState.steps !== "all" && String(x.cat||"").trim() !== filtersState.steps) return false;
+    if(filtersState[mode] !== "all" && String(x.cat||"").trim() !== filtersState[mode]) return false;
     const blob = `${x.step} ${x.cat} ${x.title} ${x.body} ${x.tags} ${x.link}`;
     return matchesQuery(blob, q);
   });
 
-  $("#statSteps").textContent = `표시: ${filtered.length} / 전체: ${items.length}`;
+  document.getElementById(statId).textContent = `표시: ${filtered.length} / 전체: ${items.length}`;
   list.innerHTML = "";
 
   if(!filtered.length){
@@ -704,7 +720,6 @@ function renderSteps(items){
 
     const title = x.title || (x.body ? x.body.split("\n")[0].slice(0,40) : `설치 항목 ${idx+1}`);
     const preview = (x.body||"").trim();
-
     const hasLink = isLikelyUrl(x.link);
     const url = hasLink ? normUrl(x.link) : "";
 
@@ -731,9 +746,16 @@ function renderSteps(items){
         </button>
       </div>
     `;
-
     list.appendChild(d);
   });
+}
+
+function renderSteps(items){
+  renderGuideList(items, "stepsList", "statSteps", "steps");
+}
+
+function renderIot(items){
+  renderGuideList(items, "iotList", "statIot", "iot");
 }
 
 function renderFiles(items){
@@ -795,9 +817,12 @@ function renderActive(){
   if(activeTab === "steps"){
     renderFilters(stepsCached, "catFiltersSteps", "steps");
     renderSteps(stepsCached);
-  }else{
+  }else if(activeTab === "files"){
     renderFilters(filesCached, "catFiltersFiles", "files");
     renderFiles(filesCached);
+  }else{
+    renderFilters(iotCached, "catFiltersIot", "iot");
+    renderIot(iotCached);
   }
 }
 
@@ -806,6 +831,8 @@ async function reload(){
   $("#stepsList").innerHTML = `<div class="empty">불러오는 중…</div>`;
   $("#statFiles").textContent = "불러오는 중…";
   $("#filesList").innerHTML = `<div class="empty">불러오는 중…</div>`;
+  $("#statIot").textContent = "불러오는 중…";
+  $("#iotList").innerHTML = `<div class="empty">불러오는 중…</div>`;
 
   try{
     __debug.steps = { tried:["GVIZ/CSV"], ok:false, error:"", rows:0, updatedAt:"" };
@@ -823,9 +850,6 @@ async function reload(){
 
   try{
     __debug.files = { tried:["GVIZ/CSV"], ok:false, error:"", rows:0, updatedAt:"" };
-    if(String(GID_FILES).includes("여기에_자료실_gid_입력")){
-      throw new Error("자료실 gid를 입력해주세요.");
-    }
     const fileRows = await loadSheetRows(GID_FILES, "select A,B,C,D,E limit 3000");
     filesCached = rowsToFileItems(fileRows);
     __debug.files.ok = true;
@@ -836,6 +860,20 @@ async function reload(){
     __debug.files.ok = false;
     __debug.files.error = e?.message ? String(e.message) : String(e);
     __debug.files.updatedAt = new Date().toLocaleString();
+  }
+
+  try{
+    __debug.iot = { tried:["GVIZ/CSV"], ok:false, error:"", rows:0, updatedAt:"" };
+    const iotRows = await loadSheetRows(GID_IOT, "select A,B,C,D,E,F limit 3000");
+    iotCached = rowsToStepItems(iotRows);
+    __debug.iot.ok = true;
+    __debug.iot.rows = iotCached.length;
+    __debug.iot.updatedAt = new Date().toLocaleString();
+  }catch(e){
+    iotCached = [];
+    __debug.iot.ok = false;
+    __debug.iot.error = e?.message ? String(e.message) : String(e);
+    __debug.iot.updatedAt = new Date().toLocaleString();
   }
 
   renderActive();
